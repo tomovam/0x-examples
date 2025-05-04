@@ -1,119 +1,190 @@
-import {
-  apiKey,
-  buyToken,
-  chainId,
-  permit2Address,
-  WALLET_SECRET,
-  WALLET_ADDRESS,
-  sellAmount,
-  sellToken,
-  usdcToken,
-  rpcUrl,
-  usdcContract,
-  provider,
-  wallet,
-} from "./constants.js";
-import { ethers } from "ethers";
-import { usdcAbi } from "./abi/usdc-abi.js";
+import { config as dotenv } from "dotenv";
 import {
   createWalletClient,
   http,
   getContract,
-  maxUint256,
-  createPublicClient,
   erc20Abi,
+  parseUnits,
+  maxUint256,
+  publicActions,
+  concat,
+  numberToHex,
+  size,
 } from "viem";
-import { arbitrum } from "viem/chains"; // Import the Arbitrum chain definition
+
+import { privateKeyToAccount } from "viem/accounts";
+import { arbitrum, base } from "viem/chains";
+import { wethAbi } from "./abi/weth-abi.js";
+import { buyToken, sellToken, usdcToken } from "./constants.js";
+
 import qs from "qs";
 
-const main = async () => {
-  // 1. Get an Indicative Price
-  const priceParams = new URLSearchParams({
-    chainId: chainId, // / Ethereum mainnet. See the 0x Cheat Sheet for all supported endpoints: https://0x.org/docs/introduction/0x-cheat-sheet
-    sellToken: sellToken, //WETH
-    buyToken: buyToken, //DAI Stable coin
-    sellAmount: sellAmount, // Note that the WETH token uses 18 decimal places, so `sellAmount` is `100 * 10^18`.
-    taker: WALLET_ADDRESS, //Address that will make the trade
-  });
+// load env vars
+dotenv();
+const { PRIVATE_KEY, API_KEY, INFURA_HTTP_TRANSPORT_URL } = process.env;
 
-  const headers = {
-    "0x-api-key": apiKey, // Get your live API key from the 0x Dashboard (https://dashboard.0x.org/apps)
-    "0x-version": "v2",
-  };
+// validate requirements
+if (!PRIVATE_KEY) throw new Error("missing PRIVATE_KEY.");
+if (!API_KEY) throw new Error("missing ZERO_EX_API_KEY.");
+if (!INFURA_HTTP_TRANSPORT_URL)
+  throw new Error("missing ALCHEMY_HTTP_TRANSPORT_URL.");
+
+// fetch headers
+const headers = new Headers({
+  "Content-Type": "application/json",
+  "0x-api-key": API_KEY,
+  "0x-version": "v2",
+});
+
+// setup wallet client
+const client = createWalletClient({
+  account: privateKeyToAccount(`0x${PRIVATE_KEY}`),
+  chain: arbitrum,
+  transport: http(INFURA_HTTP_TRANSPORT_URL),
+}).extend(publicActions); // extend wallet client with publicActions for public client
+
+const [address] = await client.getAddresses();
+
+// set up contracts
+const usdc = getContract({
+  address: usdcToken,
+  abi: erc20Abi,
+  client,
+});
+const dai = getContract({
+  address: buyToken,
+  abi: erc20Abi,
+  client,
+});
+const weth = getContract({
+  address: sellToken,
+  abi: wethAbi,
+  client,
+});
+
+const main = async () => {
+  // specify sell amount
+  const sellAmount = parseUnits("0.00000001", await usdc.read.decimals());
+
+  // 1. fetch price
+  const priceParams = new URLSearchParams({
+    chainId: client.chain.id.toString(),
+    sellToken: sellToken,
+    buyToken: buyToken,
+    sellAmount: sellAmount.toString(),
+    taker: client.account.address,
+  });
 
   const priceResponse = await fetch(
     "https://api.0x.org/swap/permit2/price?" + priceParams.toString(),
-    { headers }
-  );
-  const priceResponseParsed = await priceResponse.json();
-  const usdcContract = new ethers.Contract(usdcToken, usdcAbi, provider);
-  //
-  // 2. Check allowance is enough for Permit2 to spend sellToken
-
-  const allowance = await usdcContract.allowance(
-    WALLET_ADDRESS,
-    permit2Address
-  );
-
-  function getUsdcContractWithWallet(wallet) {
-    const usdcContractWithSigner = new ethers.Contract(
-      usdcToken,
-      usdcAbi,
-      wallet
-    );
-    return usdcContractWithSigner;
-  }
-
-  const amountToApprove = ethers.parseUnits("100", 6); // Approve 100 USDC (assuming 6 decimals)
-  if (sellAmount > allowance) {
-    const usdcContractWithWallet = getUsdcContractWithWallet(wallet);
-    async function sendApproveTransaction() {
-      try {
-        const approveTx = await usdcContractWithWallet.approve(
-          permit2Address,
-          amountToApprove
-        );
-
-        console.log("Approve transaction sent:", approveTx.hash);
-
-        // Wait for the transaction to be confirmed
-        const receipt = await approveTx.wait();
-        console.log("Approve transaction confirmed:", receipt);
-
-        return receipt;
-      } catch (error) {
-        console.error("Error sending approve transaction:", error);
-        return null;
-      }
+    {
+      headers,
     }
+  );
+
+  const price = await priceResponse.json();
+  console.log("Fetching price to swap 0.1 WTHE for USDC");
+  console.log(
+    `https://api.0x.org/swap/permit2/price?${priceParams.toString()}`
+  );
+  console.log("priceResponse: ", price);
+
+  // 2. check if taker needs to set an allowance for Permit2
+
+  if (price.issues.allowance !== null) {
     try {
-      sendApproveTransaction();
+      const { request } = await weth.simulate.approve([
+        price.issues.allowance.spender,
+        maxUint256,
+      ]);
+      console.log("Approving Permit2 to spend WETH...", request);
+      // set approval
+      const hash = await weth.write.approve(request.args);
+      console.log(
+        "Approved Permit2 to spend WETH.",
+        await client.waitForTransactionReceipt({ hash })
+      );
     } catch (error) {
-      console.log(error);
+      console.log("Error approving Permit2:", error);
     }
   } else {
-    console.log("USDC already approved for Permit2");
+    console.log("WETH already approved for Permit2");
   }
 
-  //   3. Fetch a Firm Quote
-  //   !IMPORTANT
-  //   Use /quote only when ready to fill the response; excessive unfilled requests may lead to a ban.
-  //  /quote indicates a soft commitment, prompting Market Makers to commit assets.
-  // If browsing for prices, use /price instead.
-  const params = {
-    sellToken: sellToken, //WETH
-    buyToken: buyToken, //DAI
-    sellAmount: sellAmount, // Note that the WETH token uses 18 decimal places, so `sellAmount` is `100 * 10^18`.
-    taker: WALLET_ADDRESS, //Address that will make the trade
-    chainId: chainId,
-  };
+  // 3. fetch quote
+  const quoteParams = new URLSearchParams();
+  for (const [key, value] of priceParams.entries()) {
+    quoteParams.append(key, value);
+  }
 
-  const response = await fetch(
-    `https://api.0x.org/swap/permit2/quote?${qs.stringify(params)}`,
-    { headers }
+  const quoteResponse = await fetch(
+    "https://api.0x.org/swap/permit2/quote?" + quoteParams.toString(),
+    {
+      headers,
+    }
   );
-  const quoteResonse = await response.json();
-  console.log({ quoteResonse });
-};
 
+  const quote = await quoteResponse.json();
+  console.log("Fetching quote to swap 0.1 WETH for USDC");
+  console.log("quoteResponse: ", quote);
+
+  // 4. sign permit2.eip712 returned from quote
+  let signature;
+  if (quote.permit2?.eip712) {
+    try {
+      signature = await client.signTypedData(quote.permit2.eip712);
+      console.log("Signed permit2 message from quote response");
+    } catch (error) {
+      console.error("Error signing permit2 coupon:", error);
+    }
+
+    // 5. append sig length and sig data to transaction.data
+    if (signature && quote?.transaction?.data) {
+      const signatureLengthInHex = numberToHex(size(signature), {
+        signed: false,
+        size: 32,
+      });
+
+      const transactionData = quote.transaction.data;
+      const sigLengthHex = signatureLengthInHex;
+      const sig = signature;
+
+      quote.transaction.data = concat([transactionData, sigLengthHex, sig]);
+    } else {
+      throw new Error("Failed to obtain signature or transaction data");
+    }
+  }
+  // 6. submit txn with permit2 signature
+  if (signature && quote.transaction.data) {
+    const nonce = await client.getTransactionCount({
+      address: client.account.address,
+    });
+
+    const signedTransaction = await client.signTransaction({
+      account: client.account,
+      chain: client.chain,
+      gas: !!quote?.transaction.gas
+        ? BigInt(quote?.transaction.gas)
+        : undefined,
+      to: quote?.transaction.to,
+      data: quote.transaction.data,
+      value: quote?.transaction.value
+        ? BigInt(quote.transaction.value)
+        : undefined, // value is used for native tokens
+      gasPrice: !!quote?.transaction.gasPrice
+        ? BigInt(quote?.transaction.gasPrice)
+        : undefined,
+      nonce: nonce,
+    });
+    const hash = await client.sendRawTransaction({
+      serializedTransaction: signedTransaction,
+    });
+
+    console.log("Transaction hash:", hash);
+
+    console.log(`See tx details at https://arbiscan.io/tx/${hash}`);
+  } else {
+    console.error("Failed to obtain a signature, transaction not sent.");
+  }
+};
 main();
