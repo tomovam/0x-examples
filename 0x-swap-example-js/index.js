@@ -24,6 +24,7 @@ import {
   erc20Abi,
 } from "viem";
 import { arbitrum } from "viem/chains"; // Import the Arbitrum chain definition
+import qs from "qs";
 
 const main = async () => {
   // 1. Get an Indicative Price
@@ -93,6 +94,26 @@ const main = async () => {
   } else {
     console.log("USDC already approved for Permit2");
   }
+
+  //   3. Fetch a Firm Quote
+  //   !IMPORTANT
+  //   Use /quote only when ready to fill the response; excessive unfilled requests may lead to a ban.
+  //  /quote indicates a soft commitment, prompting Market Makers to commit assets.
+  // If browsing for prices, use /price instead.
+  const params = {
+    sellToken: sellToken, //WETH
+    buyToken: buyToken, //DAI
+    sellAmount: sellAmount, // Note that the WETH token uses 18 decimal places, so `sellAmount` is `100 * 10^18`.
+    taker: WALLET_ADDRESS, //Address that will make the trade
+    chainId: chainId,
+  };
+
+  const response = await fetch(
+    `https://api.0x.org/swap/permit2/quote?${qs.stringify(params)}`,
+    { headers }
+  );
+  const quoteResonse = await response.json();
+  console.log({ quoteResonse });
 };
 
 main();
