@@ -33,3 +33,5 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+0x-swap-example-js/node_modules/
+swap-v2-headless-example/yarn.lock
