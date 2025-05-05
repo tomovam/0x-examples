@@ -1,4 +1,3 @@
-import { config as dotenv } from "dotenv";
 import {
   createWalletClient,
   http,
@@ -11,23 +10,23 @@ import {
   numberToHex,
   size,
 } from "viem";
-
 import { privateKeyToAccount } from "viem/accounts";
-import { arbitrum, base } from "viem/chains";
+import { arbitrum } from "viem/chains";
 import { wethAbi } from "./abi/weth-abi.js";
-import { buyToken, sellToken, usdcToken } from "./constants.js";
-
-import qs from "qs";
-
-// load env vars
-dotenv();
-const { PRIVATE_KEY, API_KEY, INFURA_HTTP_TRANSPORT_URL } = process.env;
+import {
+  WALLET_SECRET,
+  INFURA_URL,
+  SELL_AMOUNT,
+  SELL_TOKEN,
+  BUY_TOKEN,
+  USDC_TOKEN,
+  API_KEY,
+} from "./constants.js";
 
 // validate requirements
-if (!PRIVATE_KEY) throw new Error("missing PRIVATE_KEY.");
+if (!WALLET_SECRET) throw new Error("missing WALLET_SECRET.");
 if (!API_KEY) throw new Error("missing ZERO_EX_API_KEY.");
-if (!INFURA_HTTP_TRANSPORT_URL)
-  throw new Error("missing ALCHEMY_HTTP_TRANSPORT_URL.");
+if (!INFURA_URL) throw new Error("missing TRANSPORT URL");
 
 // fetch headers
 const headers = new Headers({
@@ -38,39 +37,43 @@ const headers = new Headers({
 
 // setup wallet client
 const client = createWalletClient({
-  account: privateKeyToAccount(`0x${PRIVATE_KEY}`),
+  account: privateKeyToAccount(`0x${WALLET_SECRET}`), // be careful if the key starts with 0x
   chain: arbitrum,
-  transport: http(INFURA_HTTP_TRANSPORT_URL),
+  transport: http(INFURA_URL),
 }).extend(publicActions); // extend wallet client with publicActions for public client
 
 const [address] = await client.getAddresses();
 
 // set up contracts
 const usdc = getContract({
-  address: usdcToken,
+  address: USDC_TOKEN,
   abi: erc20Abi,
   client,
 });
 const dai = getContract({
-  address: buyToken,
+  address: BUY_TOKEN,
   abi: erc20Abi,
   client,
 });
 const weth = getContract({
-  address: sellToken,
+  address: SELL_TOKEN,
   abi: wethAbi,
   client,
 });
 
 const main = async () => {
   // specify sell amount
-  const sellAmount = parseUnits("0.00000001", await usdc.read.decimals());
+
+  const sellAmount = parseUnits(
+    SELL_AMOUNT.toString(),
+    await usdc.read.decimals()
+  );
 
   // 1. fetch price
   const priceParams = new URLSearchParams({
     chainId: client.chain.id.toString(),
-    sellToken: sellToken,
-    buyToken: buyToken,
+    sellToken: SELL_TOKEN,
+    buyToken: BUY_TOKEN,
     sellAmount: sellAmount.toString(),
     taker: client.account.address,
   });
@@ -83,14 +86,13 @@ const main = async () => {
   );
 
   const price = await priceResponse.json();
-  console.log("Fetching price to swap 0.1 WTHE for USDC");
+  console.log(`Fetching price to swap ${SELL_AMOUNT} WETH for DAI`);
   console.log(
     `https://api.0x.org/swap/permit2/price?${priceParams.toString()}`
   );
   console.log("priceResponse: ", price);
 
   // 2. check if taker needs to set an allowance for Permit2
-
   if (price.issues.allowance !== null) {
     try {
       const { request } = await weth.simulate.approve([
@@ -125,7 +127,7 @@ const main = async () => {
   );
 
   const quote = await quoteResponse.json();
-  console.log("Fetching quote to swap 0.1 WETH for USDC");
+  console.log(`Fetching quote to swap ${SELL_AMOUNT} WETH for DAI`);
   console.log("quoteResponse: ", quote);
 
   // 4. sign permit2.eip712 returned from quote

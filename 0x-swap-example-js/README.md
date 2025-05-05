@@ -26,3 +26,15 @@ https://0x.org/docs/introduction/getting-started#33-make-your-first-0x-api-call
 5. Sign the Permit2 EIP-712 message
 6. Append signature length and signature data to calldata
 7. .emvSubmit the transaction with Permit2 signature
+
+# Steps to setup local development environment
+
+## MacOS
+
+- Install foundryup by following these steps
+  https://docs.uniswap.org/sdk/v3/guides/local-development#using-foundry-and-anvil
+- Then use this command (after replacing the API key and an up-to-date block number)
+
+```shell
+anvil --fork-url https://arbitrum-mainnet.infura.io/v3/c616a0840d4b4a8ebc088f29d56fefe1 --fork-block-number 333567604 --fork-chain-id 42161 --chain-id 42161
+```
