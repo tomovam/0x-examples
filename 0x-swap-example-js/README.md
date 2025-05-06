@@ -38,3 +38,17 @@ https://0x.org/docs/introduction/getting-started#33-make-your-first-0x-api-call
 ```shell
 anvil --fork-url https://arbitrum-mainnet.infura.io/v3/c616a0840d4b4a8ebc088f29d56fefe1 --fork-block-number 333567604 --fork-chain-id 42161 --chain-id 42161
 ```
+
+# 0x working on testnest - utilise for comparison
+
+https://0x.org/docs/1.0/0x-swap-api/guides/working-in-the-testnet
+
+# limit and other orders
+
+https://0x.org/docs/1.0/0x-swap-api/guides/working-in-the-testnet
+
+https://docs.0xprotocol.org/en/latest/basics/orders.html
+
+# swap params
+
+https://0x.org/docs/0x-swap-api/guides/troubleshooting-swap-api
